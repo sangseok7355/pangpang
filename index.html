@@ -1,0 +1,763 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>팡팡 — 체육 수업을 더 신나게</title>
+<meta name="description" content="모둠편성, TGT 토너먼트, 출결 체크, GPAI 평가, 타이머까지. 체육 선생님을 위한 올인원 수업 도구.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Black+Han+Sans&family=Noto+Sans+KR:wght@400;500;700&display=swap" rel="stylesheet">
+<style>
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+:root {
+  --bg: #0a0f0b;
+  --bg2: #0f1a12;
+  --surface: #152019;
+  --surface2: #1c2d20;
+  --border: #1e3022;
+  --border2: #2a4030;
+  --accent: #4dd469;
+  --accent2: #2bb048;
+  --accent-glow: rgba(77, 212, 105, 0.15);
+  --text: #edf7ea;
+  --text2: #7faa86;
+  --text3: #3d5e42;
+  --gold: #f5c542;
+  --amber: #f09030;
+  --blue: #5b9bd5;
+  --coral: #e07060;
+  --purple: #9b7fe8;
+  --radius: 16px;
+  --radius-sm: 10px;
+}
+
+html { scroll-behavior: smooth; }
+
+body {
+  font-family: 'Noto Sans KR', sans-serif;
+  background: var(--bg);
+  color: var(--text);
+  min-height: 100vh;
+  overflow-x: hidden;
+}
+
+/* ── NOISE TEXTURE OVERLAY ── */
+body::before {
+  content: '';
+  position: fixed;
+  inset: 0;
+  background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='noise'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23noise)' opacity='0.03'/%3E%3C/svg%3E");
+  pointer-events: none;
+  z-index: 0;
+  opacity: 0.4;
+}
+
+/* ── NAV ── */
+nav {
+  position: fixed;
+  top: 0; left: 0; right: 0;
+  z-index: 100;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 2rem;
+  height: 60px;
+  background: rgba(10, 15, 11, 0.85);
+  backdrop-filter: blur(12px);
+  border-bottom: 1px solid var(--border);
+}
+.nav-logo {
+  font-family: 'Black Han Sans', sans-serif;
+  font-size: 22px;
+  color: var(--accent);
+  letter-spacing: -0.5px;
+  text-decoration: none;
+}
+.nav-logo span { color: var(--text); }
+.nav-links { display: flex; gap: 2rem; align-items: center; }
+.nav-links a {
+  color: var(--text2);
+  text-decoration: none;
+  font-size: 13px;
+  font-weight: 500;
+  transition: color 0.2s;
+}
+.nav-links a:hover { color: var(--text); }
+.nav-cta {
+  background: var(--accent);
+  color: #0a1a0c !important;
+  padding: 8px 18px;
+  border-radius: var(--radius-sm);
+  font-weight: 700 !important;
+  font-size: 13px !important;
+  transition: background 0.2s !important;
+}
+.nav-cta:hover { background: var(--accent2) !important; color: #fff !important; }
+
+/* ── HERO ── */
+.hero {
+  position: relative;
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  padding: 8rem 2rem 4rem;
+  overflow: hidden;
+}
+
+/* grid background */
+.hero::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background-image:
+    linear-gradient(var(--border) 1px, transparent 1px),
+    linear-gradient(90deg, var(--border) 1px, transparent 1px);
+  background-size: 60px 60px;
+  mask-image: radial-gradient(ellipse 80% 60% at 50% 40%, black 30%, transparent 100%);
+  opacity: 0.5;
+}
+
+/* glow orb */
+.hero-orb {
+  position: absolute;
+  top: 20%;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 500px;
+  height: 500px;
+  background: radial-gradient(circle, var(--accent-glow) 0%, transparent 70%);
+  pointer-events: none;
+}
+
+.hero-content { position: relative; z-index: 1; max-width: 720px; }
+
+.hero-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  background: var(--surface2);
+  border: 1px solid var(--border2);
+  color: var(--accent);
+  font-size: 12px;
+  font-weight: 500;
+  padding: 5px 14px;
+  border-radius: 20px;
+  margin-bottom: 2rem;
+  letter-spacing: 0.04em;
+  animation: fadeUp 0.6s ease both;
+}
+.hero-badge::before {
+  content: '';
+  width: 6px; height: 6px;
+  border-radius: 50%;
+  background: var(--accent);
+  animation: pulse 2s infinite;
+}
+@keyframes pulse {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.5; transform: scale(0.8); }
+}
+
+.hero-title {
+  font-family: 'Black Han Sans', sans-serif;
+  font-size: clamp(42px, 8vw, 72px);
+  font-weight: 400;
+  line-height: 1.1;
+  color: var(--text);
+  margin-bottom: 1.5rem;
+  animation: fadeUp 0.6s 0.1s ease both;
+}
+.hero-title .accent { color: var(--accent); }
+.hero-title .line2 { display: block; }
+
+.hero-sub {
+  font-size: clamp(14px, 2vw, 17px);
+  color: var(--text2);
+  line-height: 1.7;
+  margin-bottom: 2.5rem;
+  animation: fadeUp 0.6s 0.2s ease both;
+}
+
+.hero-btns {
+  display: flex;
+  gap: 12px;
+  justify-content: center;
+  flex-wrap: wrap;
+  animation: fadeUp 0.6s 0.3s ease both;
+}
+.btn-primary {
+  background: var(--accent);
+  color: #0a1a0c;
+  font-family: 'Noto Sans KR', sans-serif;
+  font-size: 15px;
+  font-weight: 700;
+  border: none;
+  padding: 14px 28px;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition: all 0.2s;
+  text-decoration: none;
+  display: inline-block;
+}
+.btn-primary:hover { background: #5ee87a; transform: translateY(-1px); }
+.btn-secondary {
+  background: transparent;
+  color: var(--text2);
+  font-family: 'Noto Sans KR', sans-serif;
+  font-size: 15px;
+  font-weight: 500;
+  border: 1px solid var(--border2);
+  padding: 14px 28px;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition: all 0.2s;
+  text-decoration: none;
+  display: inline-block;
+}
+.btn-secondary:hover { border-color: var(--text3); color: var(--text); }
+
+/* scroll indicator */
+.scroll-hint {
+  position: absolute;
+  bottom: 2rem;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  color: var(--text3);
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  animation: fadeUp 0.6s 0.6s ease both;
+}
+.scroll-arrow {
+  width: 1px;
+  height: 30px;
+  background: linear-gradient(to bottom, transparent, var(--text3));
+  animation: scrollDown 1.5s infinite;
+}
+@keyframes scrollDown {
+  0% { transform: scaleY(0); transform-origin: top; }
+  50% { transform: scaleY(1); transform-origin: top; }
+  51% { transform: scaleY(1); transform-origin: bottom; }
+  100% { transform: scaleY(0); transform-origin: bottom; }
+}
+
+@keyframes fadeUp {
+  from { opacity: 0; transform: translateY(20px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+/* ── TOOLS SECTION ── */
+.section {
+  position: relative;
+  padding: 6rem 2rem;
+  max-width: 1000px;
+  margin: 0 auto;
+}
+.section-header {
+  text-align: center;
+  margin-bottom: 3rem;
+}
+.section-label {
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--accent);
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  margin-bottom: 0.75rem;
+}
+.section-title {
+  font-family: 'Black Han Sans', sans-serif;
+  font-size: clamp(28px, 5vw, 42px);
+  font-weight: 400;
+  color: var(--text);
+  line-height: 1.2;
+}
+.section-sub {
+  margin-top: 0.75rem;
+  font-size: 15px;
+  color: var(--text2);
+}
+
+/* ── TOOLS GRID ── */
+.tools-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 1px;
+  background: var(--border);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  overflow: hidden;
+}
+@media(max-width: 700px) {
+  .tools-grid { grid-template-columns: 1fr 1fr; }
+}
+@media(max-width: 420px) {
+  .tools-grid { grid-template-columns: 1fr; }
+}
+
+.tool-card {
+  background: var(--surface);
+  padding: 2rem 1.5rem;
+  transition: background 0.2s;
+  cursor: pointer;
+  text-decoration: none;
+  display: block;
+  position: relative;
+  overflow: hidden;
+}
+.tool-card:hover { background: var(--surface2); }
+.tool-card::after {
+  content: '';
+  position: absolute;
+  top: 0; left: 0; right: 0;
+  height: 2px;
+  background: var(--tool-color, var(--accent));
+  transform: scaleX(0);
+  transform-origin: left;
+  transition: transform 0.25s ease;
+}
+.tool-card:hover::after { transform: scaleX(1); }
+
+.tool-icon-wrap {
+  width: 44px; height: 44px;
+  border-radius: 10px;
+  background: var(--tool-bg, var(--accent-glow));
+  display: flex; align-items: center; justify-content: center;
+  margin-bottom: 1rem;
+}
+.tool-icon-wrap svg { flex-shrink: 0; }
+
+.tool-name {
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--text);
+  margin-bottom: 0.4rem;
+}
+.tool-desc {
+  font-size: 12px;
+  color: var(--text2);
+  line-height: 1.6;
+  margin-bottom: 1rem;
+}
+.tool-chip {
+  display: inline-block;
+  font-size: 10px;
+  font-weight: 500;
+  padding: 3px 10px;
+  border-radius: 20px;
+  background: var(--tool-chip-bg, var(--surface2));
+  color: var(--tool-color, var(--accent));
+  border: 1px solid var(--tool-color, var(--border2));
+}
+
+/* ── FEATURES ── */
+.features-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 1.5rem;
+}
+@media(max-width: 600px) { .features-grid { grid-template-columns: 1fr; } }
+
+.feature-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 1.75rem;
+  position: relative;
+  overflow: hidden;
+}
+.feature-card.wide { grid-column: span 2; }
+@media(max-width: 600px) { .feature-card.wide { grid-column: span 1; } }
+
+.feature-number {
+  font-family: 'Black Han Sans', sans-serif;
+  font-size: 48px;
+  color: var(--border2);
+  position: absolute;
+  bottom: -8px; right: 12px;
+  line-height: 1;
+}
+.feature-label {
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--accent);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  margin-bottom: 0.5rem;
+}
+.feature-title {
+  font-size: 18px;
+  font-weight: 700;
+  color: var(--text);
+  margin-bottom: 0.5rem;
+}
+.feature-body {
+  font-size: 13px;
+  color: var(--text2);
+  line-height: 1.7;
+}
+
+/* ── STATS ── */
+.stats-band {
+  border-top: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
+  background: var(--surface);
+  padding: 3rem 2rem;
+}
+.stats-inner {
+  max-width: 800px;
+  margin: 0 auto;
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 2rem;
+  text-align: center;
+}
+@media(max-width: 600px) { .stats-inner { grid-template-columns: repeat(2, 1fr); } }
+
+.stat-num {
+  font-family: 'Black Han Sans', sans-serif;
+  font-size: 36px;
+  color: var(--accent);
+  display: block;
+}
+.stat-desc { font-size: 12px; color: var(--text2); margin-top: 4px; }
+
+/* ── HOW IT WORKS ── */
+.steps {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  position: relative;
+}
+.steps::before {
+  content: '';
+  position: absolute;
+  left: 19px;
+  top: 40px;
+  bottom: 40px;
+  width: 1px;
+  background: linear-gradient(to bottom, var(--accent), var(--border));
+}
+.step {
+  display: flex;
+  gap: 1.5rem;
+  align-items: flex-start;
+  padding: 1.5rem 0;
+}
+.step-num {
+  flex-shrink: 0;
+  width: 40px; height: 40px;
+  border-radius: 50%;
+  background: var(--surface2);
+  border: 2px solid var(--accent);
+  display: flex; align-items: center; justify-content: center;
+  font-family: 'Black Han Sans', sans-serif;
+  font-size: 16px;
+  color: var(--accent);
+  position: relative;
+  z-index: 1;
+}
+.step-content {}
+.step-title { font-size: 16px; font-weight: 700; color: var(--text); margin-bottom: 4px; }
+.step-body { font-size: 13px; color: var(--text2); line-height: 1.6; }
+
+/* ── CTA BAND ── */
+.cta-band {
+  background: var(--surface);
+  border-top: 1px solid var(--border);
+  padding: 5rem 2rem;
+  text-align: center;
+  position: relative;
+  overflow: hidden;
+}
+.cta-band::before {
+  content: '';
+  position: absolute;
+  top: -100px; left: 50%;
+  transform: translateX(-50%);
+  width: 600px; height: 300px;
+  background: radial-gradient(ellipse, var(--accent-glow) 0%, transparent 70%);
+  pointer-events: none;
+}
+.cta-title {
+  font-family: 'Black Han Sans', sans-serif;
+  font-size: clamp(28px, 5vw, 44px);
+  color: var(--text);
+  margin-bottom: 0.75rem;
+  position: relative;
+}
+.cta-sub {
+  font-size: 15px;
+  color: var(--text2);
+  margin-bottom: 2rem;
+  position: relative;
+}
+.cta-band .btn-primary { position: relative; }
+
+/* ── FOOTER ── */
+footer {
+  padding: 2rem;
+  border-top: 1px solid var(--border);
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 1rem;
+  max-width: 1000px;
+  margin: 0 auto;
+}
+.footer-logo {
+  font-family: 'Black Han Sans', sans-serif;
+  font-size: 16px;
+  color: var(--text3);
+}
+.footer-logo span { color: var(--accent); }
+.footer-note { font-size: 12px; color: var(--text3); }
+
+/* ── DIVIDER ── */
+.divider {
+  width: 40px; height: 2px;
+  background: var(--accent);
+  margin: 1rem auto;
+}
+
+</style>
+</head>
+<body>
+
+<!-- NAV -->
+<nav>
+  <a href="#" class="nav-logo">팡<span>팡</span></a>
+  <div class="nav-links">
+    <a href="#tools">기능</a>
+    <a href="#how">사용법</a>
+    <a href="#tools" class="nav-cta">바로 시작</a>
+  </div>
+</nav>
+
+<!-- HERO -->
+<section class="hero">
+  <div class="hero-orb"></div>
+  <div class="hero-content">
+    <div class="hero-badge">체육 선생님 전용 수업 도구</div>
+    <h1 class="hero-title">
+      수업도 점수도<br>
+      <span class="accent">팡팡!</span>
+    </h1>
+    <p class="hero-sub">
+      모둠편성부터 TGT 토너먼트, 출결 체크, GPAI 관찰 평가, 타이머까지<br>
+      체육 수업에 필요한 모든 도구를 한 곳에서. 팡팡과 함께라면 수업 준비도 팡팡!
+    </p>
+    <div class="hero-btns">
+      <a href="#tools" class="btn-primary">지금 무료로 시작하기</a>
+      <a href="#how" class="btn-secondary">사용법 보기</a>
+    </div>
+  </div>
+  <div class="scroll-hint">
+    <span>SCROLL</span>
+    <div class="scroll-arrow"></div>
+  </div>
+</section>
+
+<!-- STATS -->
+<div class="stats-band">
+  <div class="stats-inner">
+    <div>
+      <span class="stat-num">5</span>
+      <div class="stat-desc">핵심 기능</div>
+    </div>
+    <div>
+      <span class="stat-num">0원</span>
+      <div class="stat-desc">완전 무료</div>
+    </div>
+    <div>
+      <span class="stat-num">즉시</span>
+      <div class="stat-desc">설치 없이 브라우저 실행</div>
+    </div>
+    <div>
+      <span class="stat-num">100%</span>
+      <div class="stat-desc">체육 수업 특화 설계</div>
+    </div>
+  </div>
+</div>
+
+<!-- TOOLS -->
+<section class="section" id="tools">
+  <div class="section-header">
+    <div class="section-label">핵심 기능</div>
+    <h2 class="section-title">수업마다 꺼내 쓰는<br>5가지 도구</h2>
+    <p class="section-sub">복잡한 설정 없이 클릭 한 번으로 바로 사용</p>
+    <div class="divider"></div>
+  </div>
+
+  <div class="tools-grid">
+    <!-- 모둠편성 -->
+    <a href="modoom.html" class="tool-card" style="--tool-color:#4dd469; --tool-bg:rgba(77,212,105,0.1); --tool-chip-bg:rgba(77,212,105,0.08);">
+      <div class="tool-icon-wrap">
+        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#4dd469" stroke-width="1.8">
+          <circle cx="9" cy="7" r="3"/><circle cx="15" cy="7" r="3"/>
+          <path d="M3 21v-2a6 6 0 0 1 6-6h6a6 6 0 0 1 6 6v2"/>
+        </svg>
+      </div>
+      <div class="tool-name">모둠 편성</div>
+      <div class="tool-desc">랜덤 배정 또는 성별·실력 조건에 따른 자동 모둠 구성</div>
+      <span class="tool-chip">협동학습</span>
+    </a>
+
+    <!-- TGT -->
+    <a href="tgt.html" class="tool-card" style="--tool-color:#f5c542; --tool-bg:rgba(245,197,66,0.1); --tool-chip-bg:rgba(245,197,66,0.08);">
+      <div class="tool-icon-wrap">
+        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#f5c542" stroke-width="1.8">
+          <path d="M6 9H4.5a2.5 2.5 0 0 1 0-5H6"/>
+          <path d="M18 9h1.5a2.5 2.5 0 0 0 0-5H18"/>
+          <path d="M4 22h16"/>
+          <path d="M10 14.66V17c0 .55-.47.98-.97 1.21C7.85 18.75 7 20.24 7 22"/>
+          <path d="M14 14.66V17c0 .55.47.98.97 1.21C16.15 18.75 17 20.24 17 22"/>
+          <path d="M18 2H6v7a6 6 0 0 0 12 0V2Z"/>
+        </svg>
+      </div>
+      <div class="tool-name">TGT 토너먼트</div>
+      <div class="tool-desc">팀 배틀 매칭, 실시간 점수판, 순위표 자동 정렬</div>
+      <span class="tool-chip">게임중심학습</span>
+    </a>
+
+    <!-- 출결 -->
+    <a href="attendance.html" class="tool-card" style="--tool-color:#5b9bd5; --tool-bg:rgba(91,155,213,0.1); --tool-chip-bg:rgba(91,155,213,0.08);">
+      <div class="tool-icon-wrap">
+        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#5b9bd5" stroke-width="1.8">
+          <path d="M9 11l3 3L22 4"/>
+          <path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/>
+        </svg>
+      </div>
+      <div class="tool-name">출결 체크</div>
+      <div class="tool-desc">원터치 출석 입력, 날짜별 기록 저장 및 통계 확인</div>
+      <span class="tool-chip">수업 관리</span>
+    </a>
+
+    <!-- GPAI -->
+    <a href="gpai.html" class="tool-card" style="--tool-color:#e07060; --tool-bg:rgba(224,112,96,0.1); --tool-chip-bg:rgba(224,112,96,0.08);">
+      <div class="tool-icon-wrap">
+        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#e07060" stroke-width="1.8">
+          <path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z"/>
+          <path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z"/>
+        </svg>
+      </div>
+      <div class="tool-name">GPAI 관찰 평가</div>
+      <div class="tool-desc">의사결정·기능 실행·지원 항목을 실시간 터치로 체크</div>
+      <span class="tool-chip">수행평가</span>
+    </a>
+
+    <!-- 타이머 -->
+    <a href="timer.html" class="tool-card" style="--tool-color:#9b7fe8; --tool-bg:rgba(155,127,232,0.1); --tool-chip-bg:rgba(155,127,232,0.08);">
+      <div class="tool-icon-wrap">
+        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#9b7fe8" stroke-width="1.8">
+          <circle cx="12" cy="12" r="10"/>
+          <polyline points="12 6 12 12 16 14"/>
+        </svg>
+      </div>
+      <div class="tool-name">타이머 · 신호</div>
+      <div class="tool-desc">카운트다운, 인터벌 타이머, 호루라기 신호음 내장</div>
+      <span class="tool-chip">수업 진행</span>
+    </a>
+
+    <!-- 빈 슬롯 - coming soon -->
+    <div class="tool-card" style="cursor:default; opacity:0.4; --tool-color:#3d5e42;">
+      <div class="tool-icon-wrap" style="background: rgba(61,94,66,0.2);">
+        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#3d5e42" stroke-width="1.8">
+          <circle cx="12" cy="12" r="10"/>
+          <line x1="12" y1="8" x2="12" y2="16"/>
+          <line x1="8" y1="12" x2="16" y2="12"/>
+        </svg>
+      </div>
+      <div class="tool-name">곧 추가 예정</div>
+      <div class="tool-desc">더 많은 체육 수업 도구가 준비 중입니다</div>
+      <span class="tool-chip" style="color:#3d5e42; border-color:#3d5e42;">coming soon</span>
+    </div>
+  </div>
+</section>
+
+<!-- FEATURES -->
+<section class="section">
+  <div class="section-header">
+    <div class="section-label">왜 팡팡인가</div>
+    <h2 class="section-title">체육 수업을 위해<br>처음부터 다시 만들었습니다</h2>
+    <div class="divider"></div>
+  </div>
+  <div class="features-grid">
+    <div class="feature-card">
+      <div class="feature-label">설치 불필요</div>
+      <div class="feature-title">브라우저만 있으면 끝</div>
+      <div class="feature-body">앱 설치, 로그인, 회원가입 없이 링크 하나로 바로 시작합니다. 스마트폰, 태블릿, PC 모두 지원.</div>
+      <div class="feature-number">01</div>
+    </div>
+    <div class="feature-card">
+      <div class="feature-label">체육 특화</div>
+      <div class="feature-title">TGT, GPAI를 기본으로</div>
+      <div class="feature-body">범용 도구가 아닙니다. 체육 교육학의 협동학습 모형과 수행평가 기준에 맞게 설계했습니다.</div>
+      <div class="feature-number">02</div>
+    </div>
+    <div class="feature-card wide">
+      <div class="feature-label">수업 흐름</div>
+      <div class="feature-title">준비 → 진행 → 평가를 하나의 흐름으로</div>
+      <div class="feature-body">모둠편성으로 팀을 만들고, TGT로 경쟁하며, GPAI로 평가하고, 출결로 마무리합니다. 수업의 모든 단계가 연결됩니다.</div>
+      <div class="feature-number">03</div>
+    </div>
+  </div>
+</section>
+
+<!-- HOW IT WORKS -->
+<section class="section" id="how">
+  <div class="section-header">
+    <div class="section-label">사용법</div>
+    <h2 class="section-title">3단계면 충분합니다</h2>
+    <div class="divider"></div>
+  </div>
+  <div style="max-width: 520px; margin: 0 auto;">
+    <div class="steps">
+      <div class="step">
+        <div class="step-num">1</div>
+        <div class="step-content">
+          <div class="step-title">원하는 도구 선택</div>
+          <div class="step-body">위 기능 목록에서 오늘 수업에 필요한 도구를 클릭합니다. 모둠편성이 필요하면 모둠편성, 토너먼트면 TGT.</div>
+        </div>
+      </div>
+      <div class="step">
+        <div class="step-num">2</div>
+        <div class="step-content">
+          <div class="step-title">학생 명단 입력</div>
+          <div class="step-body">이름을 직접 입력하거나, 줄바꿈으로 구분해서 붙여넣기 합니다. 한 번 저장하면 다음 수업에도 재사용.</div>
+        </div>
+      </div>
+      <div class="step">
+        <div class="step-num">3</div>
+        <div class="step-content">
+          <div class="step-title">수업 시작</div>
+          <div class="step-body">그게 전부입니다. 화면을 프로젝터에 띄우거나 학생 기기에 링크를 공유해서 바로 수업에 활용하세요.</div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- CTA -->
+<div class="cta-band">
+  <h2 class="cta-title">지금 바로 팡팡 시작해보세요</h2>
+  <p class="cta-sub">가입도 설치도 없이, 링크 하나면 끝</p>
+  <a href="#tools" class="btn-primary">도구 모음 보기 →</a>
+</div>
+
+<!-- FOOTER -->
+<footer>
+  <div class="footer-logo"><span>팡</span>팡</div>
+  <div class="footer-note">점수도 팡팡, 수업도 팡팡 — 체육 선생님 전용 무료 도구</div>
+</footer>
+
+</body>
+</html>
