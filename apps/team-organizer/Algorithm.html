@@ -1,0 +1,497 @@
+<script>
+/**
+ * 팀 편성 알고리즘 (브라우저에서 실행)
+ *
+ * 1) `같은 팀` 조건으로 학생을 묶어 하나의 "덩어리(unit)"로 만든다.
+ * 2) 무작위 그리디로 초기 배치를 만든 뒤, 이동/교환 지역 탐색으로 비용을 낮춘다.
+ * 3) 여러 번(멀티 스타트) 돌려 가장 좋은 결과를 고른다.
+ *
+ * 비용 = 인원 편차 + 성별 편차 + 실력 편차 + 과거 반복 조합 + 조건 위반
+ */
+var TeamOrganizer = (function () {
+  'use strict';
+
+  var LEVEL_VALUE = { '상': 3, '중': 2, '하': 1 };
+
+  var W_SIZE = 1000;      // 팀 인원 균등 (항상 적용)
+  var W_GENDER = 45;      // 성비 균형
+  var W_LEVEL_SUM = 30;   // 팀 평균 실력 균형
+  var W_LEVEL_DIST = 12;  // 상/중/하 분포 균형
+  var W_HISTORY = 9;      // 과거 같은 팀 반복
+  var W_VIOLATION = 1e7;  // 다른 팀 조건 위반 (사실상 금지)
+
+  function sq(x) { return x * x; }
+
+  function levelValue(level) {
+    return LEVEL_VALUE[level] || 2;
+  }
+
+  function shuffle(arr, rand) {
+    for (var i = arr.length - 1; i > 0; i--) {
+      var j = Math.floor(rand() * (i + 1));
+      var t = arr[i]; arr[i] = arr[j]; arr[j] = t;
+    }
+    return arr;
+  }
+
+  function pairKey(a, b) {
+    return a < b ? a + '::' + b : b + '::' + a;
+  }
+
+  /* ── Union-Find: `같은 팀` 조건 묶기 ── */
+  function makeFinder(n) {
+    var parent = [];
+    for (var i = 0; i < n; i++) parent.push(i);
+    function find(x) {
+      while (parent[x] !== x) { parent[x] = parent[parent[x]]; x = parent[x]; }
+      return x;
+    }
+    function union(a, b) {
+      var ra = find(a), rb = find(b);
+      if (ra !== rb) parent[rb] = ra;
+    }
+    return { find: find, union: union };
+  }
+
+  /* ── 덩어리(unit) 만들기 ── */
+  function buildUnits(students, togetherGroups, warnings) {
+    var indexById = {};
+    for (var i = 0; i < students.length; i++) indexById[students[i].id] = i;
+
+    var uf = makeFinder(students.length);
+    for (var g = 0; g < togetherGroups.length; g++) {
+      var ids = togetherGroups[g].filter(function (id) { return indexById[id] !== undefined; });
+      for (var k = 1; k < ids.length; k++) {
+        uf.union(indexById[ids[0]], indexById[ids[k]]);
+      }
+    }
+
+    var byRoot = {};
+    var units = [];
+    for (var s = 0; s < students.length; s++) {
+      var root = uf.find(s);
+      if (byRoot[root] === undefined) {
+        byRoot[root] = units.length;
+        units.push({
+          index: units.length, members: [], size: 0,
+          male: 0, female: 0, levelSum: 0, high: 0, mid: 0, low: 0
+        });
+      }
+      var u = units[byRoot[root]];
+      var st = students[s];
+      u.members.push(st);
+      u.size++;
+      if (st.gender === '남') u.male++;
+      else if (st.gender === '여') u.female++;
+      u.levelSum += levelValue(st.level);
+      if (st.level === '상') u.high++;
+      else if (st.level === '하') u.low++;
+      else u.mid++;
+    }
+
+    return { units: units, unitOfStudent: byRoot, indexById: indexById, uf: uf };
+  }
+
+  /* ── 덩어리 사이의 과거 반복 가중치 ── */
+  function buildUnitLinks(units, pairWeights, useHistory) {
+    var links = [];
+    for (var i = 0; i < units.length; i++) {
+      links.push([]);
+      for (var j = 0; j < units.length; j++) links[i].push(0);
+    }
+    if (!useHistory || !pairWeights) return links;
+
+    for (var a = 0; a < units.length; a++) {
+      for (var b = a + 1; b < units.length; b++) {
+        var total = 0;
+        var ma = units[a].members, mb = units[b].members;
+        for (var x = 0; x < ma.length; x++) {
+          for (var y = 0; y < mb.length; y++) {
+            var w = pairWeights[pairKey(ma[x].key, mb[y].key)];
+            if (w) total += w;
+          }
+        }
+        links[a][b] = total;
+        links[b][a] = total;
+      }
+    }
+    return links;
+  }
+
+  /* ── 팀 상태 ── */
+  function emptyTeam(index) {
+    return {
+      index: index, units: [], size: 0, male: 0, female: 0,
+      levelSum: 0, high: 0, mid: 0, low: 0, hist: 0, violations: 0
+    };
+  }
+
+  function linkSum(team, unit, ctx, skipUnitIndex) {
+    var total = 0;
+    for (var i = 0; i < team.units.length; i++) {
+      var v = team.units[i];
+      if (v.index === unit.index || v.index === skipUnitIndex) continue;
+      total += ctx.links[unit.index][v.index];
+    }
+    return total;
+  }
+
+  function violationsWith(team, unit, ctx, skipUnitIndex) {
+    var count = 0;
+    var apart = ctx.apart[unit.index];
+    if (!apart) return 0;
+    for (var i = 0; i < team.units.length; i++) {
+      var v = team.units[i];
+      if (v.index === unit.index || v.index === skipUnitIndex) continue;
+      if (apart[v.index]) count++;
+    }
+    return count;
+  }
+
+  /** 특정 팀 구성의 비용. add/remove 를 가정한 "가상 상태"도 계산할 수 있다. */
+  function teamCost(team, ctx, removeUnit, addUnit) {
+    var size = team.size, male = team.male, levelSum = team.levelSum;
+    var high = team.high, mid = team.mid, low = team.low;
+    var hist = team.hist, viol = team.violations;
+
+    if (removeUnit) {
+      size -= removeUnit.size; male -= removeUnit.male; levelSum -= removeUnit.levelSum;
+      high -= removeUnit.high; mid -= removeUnit.mid; low -= removeUnit.low;
+      hist -= linkSum(team, removeUnit, ctx, -1);
+      viol -= violationsWith(team, removeUnit, ctx, -1);
+    }
+    if (addUnit) {
+      size += addUnit.size; male += addUnit.male; levelSum += addUnit.levelSum;
+      high += addUnit.high; mid += addUnit.mid; low += addUnit.low;
+      hist += linkSum(team, addUnit, ctx, removeUnit ? removeUnit.index : -1);
+      viol += violationsWith(team, addUnit, ctx, removeUnit ? removeUnit.index : -1);
+    }
+
+    var cost = W_SIZE * sq(size - ctx.idealSize) + W_VIOLATION * viol;
+    if (ctx.balanceGender) {
+      cost += W_GENDER * sq(male - size * ctx.maleRatio);
+    }
+    if (ctx.balanceLevel) {
+      cost += W_LEVEL_SUM * sq(levelSum - size * ctx.avgLevel);
+      cost += W_LEVEL_DIST * (
+        sq(high - size * ctx.highRatio) +
+        sq(mid - size * ctx.midRatio) +
+        sq(low - size * ctx.lowRatio)
+      );
+    }
+    if (ctx.useHistory) cost += W_HISTORY * hist;
+    return cost;
+  }
+
+  function addUnitToTeam(team, unit, ctx) {
+    team.hist += linkSum(team, unit, ctx, -1);
+    team.violations += violationsWith(team, unit, ctx, -1);
+    team.units.push(unit);
+    team.size += unit.size; team.male += unit.male; team.female += unit.female;
+    team.levelSum += unit.levelSum;
+    team.high += unit.high; team.mid += unit.mid; team.low += unit.low;
+  }
+
+  function removeUnitFromTeam(team, unit, ctx) {
+    var at = -1;
+    for (var i = 0; i < team.units.length; i++) {
+      if (team.units[i].index === unit.index) { at = i; break; }
+    }
+    if (at < 0) return;
+    team.units.splice(at, 1);
+    team.hist -= linkSum(team, unit, ctx, -1);
+    team.violations -= violationsWith(team, unit, ctx, -1);
+    team.size -= unit.size; team.male -= unit.male; team.female -= unit.female;
+    team.levelSum -= unit.levelSum;
+    team.high -= unit.high; team.mid -= unit.mid; team.low -= unit.low;
+  }
+
+  function totalCost(teams, ctx) {
+    var sum = 0;
+    for (var i = 0; i < teams.length; i++) sum += teamCost(teams[i], ctx);
+    return sum;
+  }
+
+  /* ── 초기 배치 (무작위 그리디) ── */
+  function initialAssignment(ctx, rand) {
+    var teams = [];
+    for (var t = 0; t < ctx.teamCount; t++) teams.push(emptyTeam(t));
+
+    var order = shuffle(ctx.units.slice(), rand);
+    // 큰 덩어리부터 배치해야 자리가 남는다 (같은 크기끼리는 무작위 순서 유지)
+    order.sort(function (a, b) { return b.size - a.size; });
+
+    for (var i = 0; i < order.length; i++) {
+      var unit = order[i];
+      var scored = [];
+      for (var k = 0; k < teams.length; k++) {
+        var before = teamCost(teams[k], ctx);
+        var after = teamCost(teams[k], ctx, null, unit);
+        scored.push({ team: teams[k], delta: after - before });
+      }
+      scored.sort(function (a, b) { return a.delta - b.delta; });
+
+      var pick;
+      if (ctx.pureRandom) {
+        // 인원만 맞추고 나머지는 운에 맡긴다: 최선값과 같은 후보 중 무작위
+        var best = scored[0].delta;
+        var ties = scored.filter(function (s) { return s.delta <= best + 1e-9; });
+        pick = ties[Math.floor(rand() * ties.length)];
+      } else {
+        var r = rand();
+        var at = r < 0.72 ? 0 : (r < 0.92 ? 1 : 2);
+        pick = scored[Math.min(at, scored.length - 1)];
+      }
+      addUnitToTeam(pick.team, unit, ctx);
+    }
+    return teams;
+  }
+
+  /* ── 지역 탐색 (이동 + 교환) ── */
+  function localSearch(teams, ctx, rand, maxPass) {
+    var teamOf = {};
+    for (var t = 0; t < teams.length; t++) {
+      for (var i = 0; i < teams[t].units.length; i++) teamOf[teams[t].units[i].index] = t;
+    }
+
+    for (var pass = 0; pass < maxPass; pass++) {
+      var improved = false;
+      var order = shuffle(ctx.units.slice(), rand);
+
+      // 1) 이동
+      for (var u = 0; u < order.length; u++) {
+        var unit = order[u];
+        var from = teams[teamOf[unit.index]];
+        var fromBefore = teamCost(from, ctx);
+        var fromAfter = teamCost(from, ctx, unit, null);
+        var bestTeam = null, bestDelta = -1e-9;
+
+        for (var k = 0; k < teams.length; k++) {
+          if (teams[k].index === from.index) continue;
+          var toBefore = teamCost(teams[k], ctx);
+          var toAfter = teamCost(teams[k], ctx, null, unit);
+          var delta = (fromAfter - fromBefore) + (toAfter - toBefore);
+          if (delta < bestDelta) { bestDelta = delta; bestTeam = teams[k]; }
+        }
+        if (bestTeam) {
+          removeUnitFromTeam(from, unit, ctx);
+          addUnitToTeam(bestTeam, unit, ctx);
+          teamOf[unit.index] = bestTeam.index;
+          improved = true;
+        }
+      }
+
+      // 2) 교환
+      for (var a = 0; a < order.length; a++) {
+        for (var b = a + 1; b < order.length; b++) {
+          var ua = order[a], ub = order[b];
+          var ta = teams[teamOf[ua.index]], tb = teams[teamOf[ub.index]];
+          if (ta.index === tb.index) continue;
+
+          var delta2 =
+            (teamCost(ta, ctx, ua, ub) - teamCost(ta, ctx)) +
+            (teamCost(tb, ctx, ub, ua) - teamCost(tb, ctx));
+
+          if (delta2 < -1e-9) {
+            removeUnitFromTeam(ta, ua, ctx);
+            removeUnitFromTeam(tb, ub, ctx);
+            addUnitToTeam(ta, ub, ctx);
+            addUnitToTeam(tb, ua, ctx);
+            teamOf[ua.index] = tb.index;
+            teamOf[ub.index] = ta.index;
+            improved = true;
+          }
+        }
+      }
+
+      if (!improved) break;
+    }
+    return teams;
+  }
+
+  /* ── 결과 통계 ── */
+  function summarize(teams, ctx, students) {
+    var result = [];
+    var minSize = Infinity, maxSize = 0;
+    var repeatPairs = 0, repeatWeight = 0;
+
+    for (var t = 0; t < teams.length; t++) {
+      var team = teams[t];
+      var members = [];
+      for (var i = 0; i < team.units.length; i++) {
+        members = members.concat(team.units[i].members);
+      }
+      members.sort(function (x, y) {
+        var nx = parseInt(x.no, 10), ny = parseInt(y.no, 10);
+        if (!isNaN(nx) && !isNaN(ny) && nx !== ny) return nx - ny;
+        if (isNaN(nx) !== isNaN(ny)) return isNaN(nx) ? 1 : -1;
+        return x.name < y.name ? -1 : (x.name > y.name ? 1 : 0);
+      });
+
+      if (ctx.pairWeights) {
+        for (var p = 0; p < members.length; p++) {
+          for (var q = p + 1; q < members.length; q++) {
+            var w = ctx.pairWeights[pairKey(members[p].key, members[q].key)];
+            if (w) { repeatPairs++; repeatWeight += w; }
+          }
+        }
+      }
+
+      minSize = Math.min(minSize, team.size);
+      maxSize = Math.max(maxSize, team.size);
+
+      result.push({
+        index: t,
+        name: (t + 1) + '팀',
+        members: members,
+        size: team.size,
+        male: team.male,
+        female: team.female,
+        unknownGender: team.size - team.male - team.female,
+        high: team.high,
+        mid: team.mid,
+        low: team.low,
+        avgLevel: team.size ? Math.round((team.levelSum / team.size) * 100) / 100 : 0,
+        violations: team.violations
+      });
+    }
+
+    var totalViolations = 0;
+    for (var v = 0; v < result.length; v++) totalViolations += result[v].violations;
+
+    return {
+      teams: result,
+      summary: {
+        total: students.length,
+        teamCount: teams.length,
+        minSize: minSize === Infinity ? 0 : minSize,
+        maxSize: maxSize,
+        male: ctx.totalMale,
+        female: ctx.totalFemale,
+        high: ctx.totalHigh,
+        mid: ctx.totalMid,
+        low: ctx.totalLow,
+        avgLevel: students.length ? Math.round((ctx.levelTotal / students.length) * 100) / 100 : 0,
+        repeatPairs: repeatPairs,
+        repeatWeight: Math.round(repeatWeight * 10) / 10,
+        violations: totalViolations
+      }
+    };
+  }
+
+  /**
+   * @param {Object} input
+   *   students     : [{id,key,no,name,gender,level}]  (출석 학생만)
+   *   teamCount    : 2 ~ 20
+   *   together     : [[studentId, ...], ...]
+   *   apart        : [[studentId, ...], ...]
+   *   pairWeights  : { 'keyA::keyB': weight }
+   *   options      : { balanceGender, balanceLevel, useHistory, pureRandom }
+   */
+  function organize(input) {
+    var students = input.students || [];
+    var teamCount = Math.max(2, Math.min(20, parseInt(input.teamCount, 10) || 2));
+    var opts = input.options || {};
+    var warnings = [];
+
+    if (!students.length) throw new Error('출석 학생이 없습니다. 명단에서 결석을 확인해 주세요.');
+    if (students.length < teamCount) {
+      throw new Error('출석 학생(' + students.length + '명)보다 팀 수(' + teamCount + '팀)가 많습니다.');
+    }
+
+    var pureRandom = !!opts.pureRandom;
+    var built = buildUnits(students, input.together || [], warnings);
+    var units = built.units;
+
+    // `다른 팀` 조건을 덩어리 단위로 변환
+    var apart = [];
+    for (var i = 0; i < units.length; i++) apart.push({});
+
+    var apartGroups = input.apart || [];
+    for (var g = 0; g < apartGroups.length; g++) {
+      var ids = apartGroups[g].filter(function (id) { return built.indexById[id] !== undefined; });
+      for (var x = 0; x < ids.length; x++) {
+        for (var y = x + 1; y < ids.length; y++) {
+          var ux = built.unitOfStudent[built.uf.find(built.indexById[ids[x]])];
+          var uy = built.unitOfStudent[built.uf.find(built.indexById[ids[y]])];
+          if (ux === uy) {
+            warnings.push('같은 팀 조건과 다른 팀 조건이 충돌해 일부 조건을 무시했습니다.');
+            continue;
+          }
+          apart[ux][uy] = true;
+          apart[uy][ux] = true;
+        }
+      }
+    }
+
+    var maxUnitSize = 0;
+    for (var m = 0; m < units.length; m++) maxUnitSize = Math.max(maxUnitSize, units[m].size);
+    if (maxUnitSize > Math.ceil(students.length / teamCount) + 1) {
+      warnings.push('`같은 팀` 조건으로 묶인 인원(' + maxUnitSize + '명)이 많아 팀 인원이 고르지 않을 수 있습니다.');
+    }
+    if (units.length < teamCount) {
+      warnings.push('묶음 수(' + units.length + ')가 팀 수보다 적어 빈 팀이 생깁니다.');
+    }
+
+    var totalMale = 0, totalFemale = 0, totalHigh = 0, totalMid = 0, totalLow = 0, levelTotal = 0;
+    for (var s = 0; s < students.length; s++) {
+      if (students[s].gender === '남') totalMale++;
+      else if (students[s].gender === '여') totalFemale++;
+      if (students[s].level === '상') totalHigh++;
+      else if (students[s].level === '하') totalLow++;
+      else totalMid++;
+      levelTotal += levelValue(students[s].level);
+    }
+
+    var n = students.length;
+    var ctx = {
+      units: units,
+      links: buildUnitLinks(units, input.pairWeights, !pureRandom && !!opts.useHistory),
+      apart: apart,
+      teamCount: teamCount,
+      idealSize: n / teamCount,
+      maleRatio: n ? totalMale / n : 0,
+      avgLevel: n ? levelTotal / n : 0,
+      highRatio: n ? totalHigh / n : 0,
+      midRatio: n ? totalMid / n : 0,
+      lowRatio: n ? totalLow / n : 0,
+      balanceGender: !pureRandom && !!opts.balanceGender,
+      balanceLevel: !pureRandom && !!opts.balanceLevel,
+      useHistory: !pureRandom && !!opts.useHistory,
+      pureRandom: pureRandom,
+      pairWeights: input.pairWeights || null,
+      totalMale: totalMale, totalFemale: totalFemale,
+      totalHigh: totalHigh, totalMid: totalMid, totalLow: totalLow,
+      levelTotal: levelTotal
+    };
+
+    var rand = Math.random;
+    var restarts = pureRandom ? 1 : (units.length > 60 ? 6 : 14);
+    var best = null, bestCost = Infinity;
+
+    for (var r = 0; r < restarts; r++) {
+      var teams = initialAssignment(ctx, rand);
+      if (!pureRandom) localSearch(teams, ctx, rand, 6);
+      var cost = totalCost(teams, ctx);
+      if (cost < bestCost) { bestCost = cost; best = teams; }
+    }
+
+    var out = summarize(best, ctx, students);
+    if (out.summary.violations > 0) {
+      warnings.push('`다른 팀` 조건 ' + out.summary.violations + '건을 지키지 못했습니다. 팀 수를 늘리거나 조건을 줄여 보세요.');
+    }
+
+    // 중복 경고 제거
+    var seen = {}, uniqueWarnings = [];
+    for (var w = 0; w < warnings.length; w++) {
+      if (!seen[warnings[w]]) { seen[warnings[w]] = true; uniqueWarnings.push(warnings[w]); }
+    }
+
+    out.warnings = uniqueWarnings;
+    out.mode = pureRandom ? '완전 랜덤' : '균형 편성';
+    return out;
+  }
+
+  return { organize: organize, LEVEL_VALUE: LEVEL_VALUE };
+})();
+</script>
