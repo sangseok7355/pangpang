@@ -537,6 +537,7 @@ footer {
   <a href="#" class="nav-logo">팡<span>팡</span></a>
   <div class="nav-links">
     <a href="#tools">기능</a>
+    <a href="https://sangseok7355.github.io/juggling-class-app/">저글링 성장기록</a>
     <a href="#how">사용법</a>
     <a href="#tools" class="nav-cta">바로 시작</a>
   </div>
@@ -558,6 +559,7 @@ footer {
     <div class="hero-btns">
       <a href="#tools" class="btn-primary">지금 무료로 시작하기</a>
       <a href="#how" class="btn-secondary">사용법 보기</a>
+      <a href="https://sangseok7355.github.io/juggling-class-app/" class="btn-secondary">🤹 저글링 성장기록</a>
     </div>
   </div>
   <div class="scroll-hint">
@@ -592,7 +594,7 @@ footer {
 <section class="section" id="tools">
   <div class="section-header">
     <div class="section-label">핵심 기능</div>
-    <h2 class="section-title">수업마다 꺼내 쓰는<br>5가지 도구</h2>
+    <h2 class="section-title">수업마다 꺼내 쓰는<br>6가지 도구</h2>
     <p class="section-sub">복잡한 설정 없이 클릭 한 번으로 바로 사용</p>
     <div class="divider"></div>
   </div>
@@ -724,6 +726,13 @@ const TOOL_DATA = {
     chip: '야구',
     icon: `<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#f09030" stroke-width="1.8"><circle cx="12" cy="12" r="10"/><path d="M4.93 4.93c4.35 4.35 4.35 9.79 0 14.14"/><path d="M19.07 4.93c-4.35 4.35-4.35 9.79 0 14.14"/></svg>`
   },
+  '저글링 성장기록': {
+    href: 'https://sangseok7355.github.io/juggling-class-app/',
+    color: '#4dd469', bg: 'rgba(77,212,105,0.1)', chipbg: 'rgba(77,212,105,0.08)',
+    desc: '학생별 저글링 활동과 성장 과정을 기록하고 확인',
+    chip: '성장기록',
+    icon: '<span style="font-size:24px" aria-hidden="true">🤹</span>'
+  },
   '야구경기기록': {
     href: 'baseball-game.html',
     color: '#e05555', bg: 'rgba(224,85,85,0.1)', chipbg: 'rgba(224,85,85,0.08)',
@@ -742,6 +751,7 @@ async function loadTools() {
     const onTools = rows
       .map(r => r.split(',').map(c => c.trim().replace(/"/g,'')))
       .filter(([name, status]) => status === 'ON' && TOOL_DATA[name]);
+    onTools.push(['저글링 성장기록', 'ON']);
 
     if (onTools.length === 0) {
       grid.innerHTML = '<div style="grid-column:1/-1;padding:2rem;text-align:center;color:var(--text3);font-size:13px;">표시할 도구가 없습니다.</div>';
