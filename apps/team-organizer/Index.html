@@ -1,0 +1,175 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <base target="_top">
+  <meta charset="UTF-8">
+  <?!= include('Styles'); ?>
+</head>
+<body>
+
+<header class="topbar no-print">
+  <div class="brand">팡<span>팡</span> <small>체육쌤 스마트 팀 편성기</small></div>
+  <div class="topbar-right">
+    <span id="sheet-name" class="result-meta"></span>
+    <a id="sheet-link" class="sheet-link hidden" href="#" target="_blank" rel="noopener">명단 시트 열기 ↗</a>
+    <button id="btn-reload" class="mini-btn" title="시트에서 명단을 다시 불러옵니다">새로고침</button>
+  </div>
+</header>
+
+<main class="layout">
+
+  <!-- ────────── 설정 패널 ────────── -->
+  <aside class="panel sidebar no-print">
+
+    <div class="section">
+      <div class="section-title">수업 정보</div>
+      <label class="field">
+        <span>학급</span>
+        <select id="class-select"><option value="">불러오는 중…</option></select>
+      </label>
+      <label class="field">
+        <span>활동 / 종목명</span>
+        <input id="activity" type="text" list="activity-list" placeholder="예) 피구, 배구 리시브, 발야구" maxlength="40">
+        <datalist id="activity-list"></datalist>
+      </label>
+      <label class="field">
+        <span>수업 날짜</span>
+        <input id="date" type="date">
+      </label>
+    </div>
+
+    <div class="section">
+      <div class="section-title">팀 수 <span class="count" id="team-hint"></span></div>
+      <div class="stepper">
+        <button type="button" id="team-minus" aria-label="팀 수 줄이기">−</button>
+        <input id="team-count" type="number" min="2" max="20" step="1" value="4" inputmode="numeric">
+        <button type="button" id="team-plus" aria-label="팀 수 늘리기">+</button>
+      </div>
+      <div class="quick-teams" id="quick-teams"></div>
+    </div>
+
+    <div class="section">
+      <div class="section-title">편성 방식</div>
+      <div class="toggle on" data-opt="balanceGender">
+        <input type="checkbox" checked>
+        <span class="box">✓</span>
+        <span class="txt">성별 균형<span class="hint">팀마다 남녀 비율을 고르게</span></span>
+      </div>
+      <div class="toggle on" data-opt="balanceLevel">
+        <input type="checkbox" checked>
+        <span class="box">✓</span>
+        <span class="txt">실력 균형<span class="hint">상·중·하 분포와 평균을 고르게</span></span>
+      </div>
+      <div class="toggle on" data-opt="useHistory">
+        <input type="checkbox" checked>
+        <span class="box">✓</span>
+        <span class="txt">반복 조합 줄이기<span class="hint">최근 이력에서 같은 팀이었던 짝을 피함</span></span>
+      </div>
+      <div class="toggle random" data-opt="pureRandom">
+        <input type="checkbox">
+        <span class="box">✓</span>
+        <span class="txt">완전 랜덤 우선<span class="hint">인원만 맞추고 나머지는 운에 맡기기</span></span>
+      </div>
+    </div>
+
+    <div class="section">
+      <div class="section-title">
+        명단 <span class="count" id="roster-count"></span>
+      </div>
+      <div class="roster-tools">
+        <button type="button" class="mini-btn" id="btn-all-present">전체 출석</button>
+        <button type="button" class="mini-btn" id="btn-invert">결석 반전</button>
+      </div>
+      <div class="chips" id="roster"></div>
+      <div class="empty-note" id="roster-empty">학급을 선택하면 명단이 표시됩니다. 이름을 누르면 결석 처리됩니다.</div>
+    </div>
+
+    <div class="section">
+      <div class="section-title">편성 조건</div>
+
+      <div class="rule-group">
+        <button type="button" class="mini-btn" data-add-rule="together">＋ 같은 팀으로 묶기</button>
+        <div class="rule-list" id="rules-together"></div>
+      </div>
+
+      <div class="rule-group">
+        <button type="button" class="mini-btn" data-add-rule="apart">＋ 서로 다른 팀으로</button>
+        <div class="rule-list" id="rules-apart"></div>
+      </div>
+    </div>
+
+    <div class="section action-section">
+      <button type="button" class="btn btn-primary" id="btn-organize">팀 편성하기</button>
+    </div>
+  </aside>
+
+  <!-- ────────── 결과 ────────── -->
+  <section class="panel" id="result-panel">
+    <div class="placeholder" id="placeholder">
+      <div class="big">🏐</div>
+      <h2>아직 편성된 팀이 없습니다</h2>
+      <p>학급과 팀 수를 고른 뒤 <b>팀 편성하기</b>를 눌러 주세요.</p>
+    </div>
+
+    <div id="result" class="hidden">
+      <div class="result-head">
+        <div>
+          <div class="result-title" id="result-title">편성 결과</div>
+          <div class="result-meta" id="result-meta"></div>
+        </div>
+      </div>
+
+      <div id="warnings"></div>
+
+      <div class="stat-row" id="summary"></div>
+
+      <div class="actions no-print">
+        <button type="button" class="btn btn-sm" id="btn-reroll">🔄 다시 편성</button>
+        <button type="button" class="btn btn-sm" id="btn-copy">📋 복사</button>
+        <button type="button" class="btn btn-sm" id="btn-big">🔍 크게 보기</button>
+        <button type="button" class="btn btn-sm" id="btn-print">🖨 인쇄</button>
+        <button type="button" class="btn btn-sm" id="btn-save">💾 이력 저장</button>
+      </div>
+
+      <div class="team-grid" id="team-grid"></div>
+    </div>
+
+    <div class="section no-print hidden" id="history-panel">
+      <div class="section-title">최근 편성 이력 <span class="count" id="history-count"></span></div>
+      <div class="history-list" id="history-list"></div>
+    </div>
+  </section>
+</main>
+
+<!-- ────────── 학생 선택 모달 ────────── -->
+<div class="modal-backdrop" id="picker">
+  <div class="modal">
+    <h2 id="picker-title">같은 팀으로 묶기</h2>
+    <div class="sub" id="picker-sub">함께 묶을 학생을 2명 이상 선택하세요.</div>
+    <input type="text" id="picker-search" placeholder="이름 또는 번호로 찾기" autocomplete="off">
+    <div class="body" style="margin-top:10px;">
+      <div class="chips" id="picker-list"></div>
+    </div>
+    <div class="foot">
+      <button type="button" class="btn btn-sm" id="picker-cancel">취소</button>
+      <button type="button" class="btn btn-sm" id="picker-ok" style="border-color:var(--accent);color:var(--accent)">조건 추가</button>
+    </div>
+  </div>
+</div>
+
+<!-- ────────── 크게 보기 ────────── -->
+<div class="bigview" id="bigview">
+  <div class="bigview-head">
+    <h2 id="big-title">팀 편성</h2>
+    <div class="meta" id="big-meta"></div>
+    <button type="button" class="btn btn-sm" id="big-close" style="margin-left:auto">닫기 (Esc)</button>
+  </div>
+  <div class="bigview-body" id="big-body"></div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<?!= include('Algorithm'); ?>
+<?!= include('Script'); ?>
+</body>
+</html>

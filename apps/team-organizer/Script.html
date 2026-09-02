@@ -1,0 +1,720 @@
+<script>
+(function () {
+  'use strict';
+
+  var TEAM_COLORS = [
+    '#4dd469', '#f5c542', '#5b9bd5', '#e07060', '#9b7fe8', '#f09030',
+    '#3ec9b0', '#e0609b', '#8fd14f', '#d4a24d', '#6f8fe8', '#c46bd4',
+    '#4fc3d4', '#e8a04d', '#7fd4a0', '#d47f7f', '#a0a8f0', '#f0c85b',
+    '#63d488', '#b0d44d'
+  ];
+
+  var state = {
+    className: '',
+    students: [],
+    absentKeys: {},
+    pairWeights: {},
+    recentSessions: [],
+    together: [],
+    apart: [],
+    teamCount: 4,
+    options: { balanceGender: true, balanceLevel: true, useHistory: true, pureRandom: false },
+    result: null,
+    resultInfo: null,
+    savedSessionId: null,
+    loading: false
+  };
+
+  var picker = { type: null, selected: {} };
+
+  /* ────────────── 유틸 ────────────── */
+
+  function $(id) { return document.getElementById(id); }
+
+  function esc(s) {
+    return String(s == null ? '' : s)
+      .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+  }
+
+  var toastTimer = null;
+  function toast(msg, isError) {
+    var el = $('toast');
+    el.textContent = msg;
+    el.className = 'toast show' + (isError ? ' err' : '');
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(function () { el.className = 'toast'; }, isError ? 5200 : 2600);
+  }
+
+  function uid() {
+    return 'x' + Math.random().toString(36).slice(2, 9);
+  }
+
+  function storeKey() { return 'pangpang.teamOrganizer.' + state.className; }
+
+  function saveLocal() {
+    if (!state.className) return;
+    try {
+      localStorage.setItem(storeKey(), JSON.stringify({
+        absentKeys: state.absentKeys,
+        together: state.together,
+        apart: state.apart
+      }));
+      localStorage.setItem('pangpang.teamOrganizer.prefs', JSON.stringify({
+        teamCount: state.teamCount,
+        options: state.options
+      }));
+    } catch (err) { /* 저장 실패는 무시 */ }
+  }
+
+  function loadLocal() {
+    try {
+      var raw = localStorage.getItem(storeKey());
+      if (!raw) return null;
+      return JSON.parse(raw);
+    } catch (err) { return null; }
+  }
+
+  function loadPrefs() {
+    try {
+      var raw = localStorage.getItem('pangpang.teamOrganizer.prefs');
+      if (!raw) return;
+      var p = JSON.parse(raw);
+      if (p && p.teamCount) state.teamCount = Math.max(2, Math.min(20, p.teamCount));
+      if (p && p.options) {
+        for (var k in state.options) {
+          if (state.options.hasOwnProperty(k) && typeof p.options[k] === 'boolean') {
+            state.options[k] = p.options[k];
+          }
+        }
+      }
+    } catch (err) { /* 무시 */ }
+  }
+
+  function presentStudents() {
+    return state.students.filter(function (s) { return !state.absentKeys[s.key]; });
+  }
+
+  function studentByKey(key) {
+    for (var i = 0; i < state.students.length; i++) {
+      if (state.students[i].key === key) return state.students[i];
+    }
+    return null;
+  }
+
+  /* ────────────── 초기 로딩 ────────────── */
+
+  function init() {
+    loadPrefs();
+    bindEvents();
+    renderTeamCount();
+    renderOptions();
+    $('date').value = new Date().toISOString().slice(0, 10);
+
+    google.script.run
+      .withSuccessHandler(onBootstrap)
+      .withFailureHandler(onServerError)
+      .getBootstrap();
+  }
+
+  function onBootstrap(data) {
+    var sel = $('class-select');
+    sel.innerHTML = '';
+
+    if (!data.classes.length) {
+      sel.innerHTML = '<option value="">명단이 비어 있습니다</option>';
+      toast('`명단` 시트에 학생 데이터를 먼저 입력해 주세요.', true);
+    } else {
+      sel.appendChild(new Option('학급을 선택하세요', ''));
+      data.classes.forEach(function (c) { sel.appendChild(new Option(c, c)); });
+    }
+
+    $('sheet-name').textContent = data.spreadsheetName + ' · 학생 ' + data.totalStudents + '명';
+    if (data.spreadsheetUrl) {
+      var link = $('sheet-link');
+      link.href = data.spreadsheetUrl;
+      link.classList.remove('hidden');
+    }
+    if (data.today) $('date').value = data.today;
+
+    var dl = $('activity-list');
+    dl.innerHTML = (data.activities || []).map(function (a) {
+      return '<option value="' + esc(a) + '"></option>';
+    }).join('');
+
+    // 이미 보고 있던 학급이 있으면 선택만 유지 (명단 로딩은 새로고침 쪽에서 처리)
+    if (state.className && data.classes.indexOf(state.className) >= 0) {
+      sel.value = state.className;
+      return;
+    }
+
+    // 마지막으로 보던 학급 복원
+    var last = null;
+    try { last = localStorage.getItem('pangpang.teamOrganizer.lastClass'); } catch (err) { last = null; }
+    if (last && data.classes.indexOf(last) >= 0) {
+      sel.value = last;
+      loadClass(last);
+    }
+  }
+
+  function onServerError(err) {
+    state.loading = false;
+    $('btn-organize').disabled = false;
+    toast((err && err.message) ? err.message : '서버 오류가 발생했습니다.', true);
+  }
+
+  /* ────────────── 학급 로딩 ────────────── */
+
+  function loadClass(className) {
+    if (!className) {
+      state.className = '';
+      state.students = [];
+      renderRoster();
+      renderRules();
+      return;
+    }
+    state.className = className;
+    try { localStorage.setItem('pangpang.teamOrganizer.lastClass', className); } catch (err) { /* 무시 */ }
+
+    $('roster').innerHTML = '<span class="empty-note loading">명단을 불러오는 중…</span>';
+    $('roster-empty').classList.add('hidden');
+
+    google.script.run
+      .withSuccessHandler(onClassData)
+      .withFailureHandler(onServerError)
+      .getClassData(className);
+  }
+
+  function onClassData(data) {
+    state.students = data.students || [];
+    state.pairWeights = data.pairWeights || {};
+    state.recentSessions = data.recentSessions || [];
+
+    var saved = loadLocal();
+    state.absentKeys = (saved && saved.absentKeys) || {};
+    state.together = (saved && saved.together) || [];
+    state.apart = (saved && saved.apart) || [];
+
+    // 명단에서 사라진 학생이 낀 조건은 정리
+    state.together = cleanRules(state.together);
+    state.apart = cleanRules(state.apart);
+
+    renderRoster();
+    renderRules();
+    renderHistory();
+    renderTeamCount();
+    toast(data.className + ' 명단 ' + state.students.length + '명을 불러왔습니다.');
+  }
+
+  function cleanRules(rules) {
+    return rules.map(function (r) {
+      return { id: r.id || uid(), keys: (r.keys || []).filter(function (k) { return !!studentByKey(k); }) };
+    }).filter(function (r) { return r.keys.length >= 2; });
+  }
+
+  /* ────────────── 렌더링 ────────────── */
+
+  function renderRoster() {
+    var box = $('roster');
+    var note = $('roster-empty');
+
+    if (!state.students.length) {
+      box.innerHTML = '';
+      note.textContent = state.className
+        ? '이 학급에 등록된 학생이 없습니다.'
+        : '학급을 선택하면 명단이 표시됩니다. 이름을 누르면 결석 처리됩니다.';
+      note.classList.remove('hidden');
+      $('roster-count').textContent = '';
+      return;
+    }
+    note.classList.add('hidden');
+
+    box.innerHTML = state.students.map(function (s) {
+      var absent = !!state.absentKeys[s.key];
+      var cls = 'chip selectable' + (s.gender ? ' g' + s.gender : '') + (absent ? ' absent' : '');
+      return '<button type="button" class="' + cls + '" data-key="' + esc(s.key) + '">' +
+        '<span class="no">' + esc(s.no) + '</span>' +
+        '<span>' + esc(s.name) + '</span>' +
+        (s.gender ? '<span class="tag">' + esc(s.gender) + '</span>' : '') +
+        '<span class="tag">' + esc(s.level) + '</span>' +
+        '</button>';
+    }).join('');
+
+    var present = presentStudents().length;
+    var absentCount = state.students.length - present;
+    $('roster-count').textContent = '출석 ' + present + ' / ' + state.students.length +
+      (absentCount ? ' (결석 ' + absentCount + ')' : '');
+    renderTeamCount();
+  }
+
+  function ruleHtml(rule, type) {
+    var names = rule.keys.map(function (k) {
+      var s = studentByKey(k);
+      return s ? (s.no ? s.no + ' ' : '') + s.name : '?';
+    }).join(type === 'together' ? ' + ' : ' ↔ ');
+    return '<div class="rule ' + type + '" data-rule-id="' + esc(rule.id) + '" data-rule-type="' + type + '">' +
+      '<span class="names">' + esc(names) + '</span>' +
+      '<button type="button" class="del" title="삭제">✕</button>' +
+      '</div>';
+  }
+
+  function renderRules() {
+    var t = $('rules-together');
+    var a = $('rules-apart');
+    t.innerHTML = state.together.length
+      ? state.together.map(function (r) { return ruleHtml(r, 'together'); }).join('')
+      : '<div class="empty-note">조건 없음</div>';
+    a.innerHTML = state.apart.length
+      ? state.apart.map(function (r) { return ruleHtml(r, 'apart'); }).join('')
+      : '<div class="empty-note">조건 없음</div>';
+  }
+
+  function renderTeamCount() {
+    $('team-count').value = state.teamCount;
+    var quick = $('quick-teams');
+    if (!quick.dataset.built) {
+      quick.innerHTML = [2, 3, 4, 5, 6, 8, 10].map(function (n) {
+        return '<button type="button" data-team="' + n + '">' + n + '팀</button>';
+      }).join('');
+      quick.dataset.built = '1';
+    }
+    Array.prototype.forEach.call(quick.children, function (b) {
+      b.classList.toggle('on', Number(b.dataset.team) === state.teamCount);
+    });
+
+    var present = presentStudents().length;
+    if (present) {
+      var per = present / state.teamCount;
+      $('team-hint').textContent = '팀당 약 ' + (Math.floor(per) === per ? per : Math.floor(per) + '~' + Math.ceil(per)) + '명';
+    } else {
+      $('team-hint').textContent = '';
+    }
+  }
+
+  function renderOptions() {
+    Array.prototype.forEach.call(document.querySelectorAll('.toggle'), function (el) {
+      var opt = el.dataset.opt;
+      var on = !!state.options[opt];
+      el.classList.toggle('on', on);
+      el.querySelector('input').checked = on;
+      if (opt !== 'pureRandom') {
+        el.classList.toggle('disabled', !!state.options.pureRandom);
+      }
+    });
+  }
+
+  function renderHistory() {
+    var panel = $('history-panel');
+    if (!state.recentSessions.length) {
+      panel.classList.add('hidden');
+      return;
+    }
+    panel.classList.remove('hidden');
+    $('history-count').textContent = state.className;
+    $('history-list').innerHTML = state.recentSessions.map(function (s) {
+      return '<div class="history-item">' +
+        '<b>' + esc(s.activity || '활동 미기재') + '</b>' +
+        '<span>' + s.teamCount + '팀 · ' + s.students + '명</span>' +
+        '<span class="when">' + esc(s.date || '') + '</span>' +
+        '</div>';
+    }).join('');
+  }
+
+  /* ────────────── 편성 ────────────── */
+
+  function keysToIds(rules, presentList) {
+    var byKey = {};
+    presentList.forEach(function (s) { byKey[s.key] = s.id; });
+    return rules.map(function (r) {
+      return r.keys.map(function (k) { return byKey[k]; })
+        .filter(function (id) { return !!id; });
+    }).filter(function (ids) { return ids.length >= 2; });
+  }
+
+  function organize() {
+    if (!state.className) { toast('학급을 먼저 선택해 주세요.', true); return; }
+
+    var present = presentStudents();
+    if (!present.length) { toast('출석한 학생이 없습니다.', true); return; }
+    if (present.length < state.teamCount) {
+      toast('출석 ' + present.length + '명으로는 ' + state.teamCount + '팀을 만들 수 없습니다.', true);
+      return;
+    }
+
+    var out;
+    try {
+      out = TeamOrganizer.organize({
+        students: present,
+        teamCount: state.teamCount,
+        together: keysToIds(state.together, present),
+        apart: keysToIds(state.apart, present),
+        pairWeights: state.pairWeights,
+        options: state.options
+      });
+    } catch (err) {
+      toast(err.message || '편성에 실패했습니다.', true);
+      return;
+    }
+
+    state.result = out;
+    state.savedSessionId = null;
+    state.resultInfo = {
+      className: state.className,
+      activity: $('activity').value.trim(),
+      date: $('date').value,
+      at: new Date()
+    };
+    renderResult();
+    saveLocal();
+  }
+
+  function renderResult() {
+    var out = state.result;
+    if (!out) return;
+
+    $('placeholder').classList.add('hidden');
+    $('result').classList.remove('hidden');
+
+    var info = state.resultInfo;
+    $('result-title').innerHTML = esc(info.activity || '팀 편성') +
+      ' <span>' + out.teams.length + '팀</span>';
+    $('result-meta').textContent = info.className + ' · ' + (info.date || '') +
+      ' · ' + out.mode + ' · ' + timeText(info.at);
+
+    var s = out.summary;
+    var stats = [
+      ['출석', s.total + '명'],
+      ['팀당', s.minSize === s.maxSize ? s.minSize + '명' : s.minSize + '~' + s.maxSize + '명'],
+      ['성비', '남 ' + s.male + ' · 여 ' + s.female],
+      ['실력', '상 ' + s.high + ' · 중 ' + s.mid + ' · 하 ' + s.low],
+      ['평균 실력', s.avgLevel.toFixed(2)]
+    ];
+    if (state.options.useHistory && !state.options.pureRandom) {
+      stats.push(['반복된 짝', s.repeatPairs + '쌍']);
+    }
+    $('summary').innerHTML = stats.map(function (p) {
+      return '<span class="stat">' + esc(p[0]) + ' <b>' + esc(p[1]) + '</b></span>';
+    }).join('');
+
+    $('warnings').innerHTML = (out.warnings || []).map(function (w) {
+      return '<div class="warn"><span>⚠️</span><span>' + esc(w) + '</span></div>';
+    }).join('');
+
+    $('team-grid').innerHTML = out.teams.map(function (team, i) {
+      var color = TEAM_COLORS[i % TEAM_COLORS.length];
+      var members = team.members.map(function (m) {
+        return '<div class="member">' +
+          '<span class="no">' + esc(m.no) + '</span>' +
+          '<span class="nm">' + esc(m.name) + '</span>' +
+          '<span class="badges">' +
+          (m.gender ? '<span class="badge ' + esc(m.gender) + '">' + esc(m.gender) + '</span>' : '') +
+          '<span class="badge ' + esc(m.level) + '">' + esc(m.level) + '</span>' +
+          '</span></div>';
+      }).join('');
+
+      return '<div class="team-card" style="--team-color:' + color + '">' +
+        '<h3><span class="dot"></span>' + esc(team.name) +
+        '<span class="size">' + team.size + '명</span></h3>' +
+        '<div class="member-list">' + members + '</div>' +
+        '<div class="team-foot">' +
+        '<span>남 ' + team.male + ' · 여 ' + team.female + '</span>' +
+        '<span>상 ' + team.high + ' · 중 ' + team.mid + ' · 하 ' + team.low + '</span>' +
+        '<span>평균 ' + team.avgLevel.toFixed(2) + '</span>' +
+        '</div></div>';
+    }).join('');
+
+    $('btn-save').disabled = false;
+    $('btn-save').textContent = '💾 이력 저장';
+  }
+
+  function timeText(d) {
+    var h = d.getHours(), m = d.getMinutes();
+    return (h < 10 ? '0' : '') + h + ':' + (m < 10 ? '0' : '') + m;
+  }
+
+  /* ────────────── 결과 활용 ────────────── */
+
+  function resultAsText() {
+    var out = state.result, info = state.resultInfo;
+    if (!out) return '';
+    var lines = [];
+    lines.push('[' + info.className + '] ' + (info.activity || '팀 편성') + ' · ' + (info.date || ''));
+    lines.push('총 ' + out.summary.total + '명 · ' + out.teams.length + '팀');
+    lines.push('');
+    out.teams.forEach(function (team) {
+      lines.push('■ ' + team.name + ' (' + team.size + '명 · 남' + team.male + ' 여' + team.female +
+        ' · 상' + team.high + ' 중' + team.mid + ' 하' + team.low + ')');
+      team.members.forEach(function (m) {
+        lines.push('  ' + (m.no ? m.no + '. ' : '- ') + m.name);
+      });
+      lines.push('');
+    });
+    return lines.join('\n');
+  }
+
+  function copyResult() {
+    var text = resultAsText();
+    if (!text) return;
+
+    function fallback() {
+      var ta = document.createElement('textarea');
+      ta.value = text;
+      ta.style.position = 'fixed';
+      ta.style.opacity = '0';
+      document.body.appendChild(ta);
+      ta.select();
+      var ok = false;
+      try { ok = document.execCommand('copy'); } catch (err) { ok = false; }
+      document.body.removeChild(ta);
+      toast(ok ? '편성 결과를 복사했습니다.' : '복사에 실패했습니다. 길게 눌러 직접 복사해 주세요.', !ok);
+    }
+
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(text).then(function () {
+        toast('편성 결과를 복사했습니다.');
+      })['catch'](fallback);
+    } else {
+      fallback();
+    }
+  }
+
+  function openBigView() {
+    var out = state.result, info = state.resultInfo;
+    if (!out) return;
+
+    // 화면을 고르게 채우도록 행/열을 계산한다 (한 줄에 최대 4~5팀)
+    var k = out.teams.length;
+    var maxPerRow = k > 12 ? 5 : 4;
+    var rows = Math.ceil(k / maxPerRow);
+    var cols = Math.ceil(k / rows);
+    var body = $('big-body');
+    body.style.setProperty('--cols', cols);
+
+    $('big-title').textContent = (info.activity || '팀 편성');
+    $('big-meta').textContent = info.className + ' · ' + out.summary.total + '명 · ' + k + '팀';
+
+    body.innerHTML = out.teams.map(function (team, i) {
+      var color = TEAM_COLORS[i % TEAM_COLORS.length];
+      return '<div class="big-team" style="--team-color:' + color + '">' +
+        '<h3>' + esc(team.name) + '<small>' + team.size + '명</small></h3><ul>' +
+        team.members.map(function (m) {
+          return '<li><small>' + esc(m.no) + '</small>' + esc(m.name) + '</li>';
+        }).join('') +
+        '</ul></div>';
+    }).join('');
+
+    $('bigview').classList.add('open');
+  }
+
+  function closeBigView() { $('bigview').classList.remove('open'); }
+
+  function saveResult() {
+    var out = state.result, info = state.resultInfo;
+    if (!out) return;
+    if (state.savedSessionId) { toast('이미 저장한 편성입니다.'); return; }
+
+    var btn = $('btn-save');
+    btn.disabled = true;
+    btn.textContent = '저장 중…';
+
+    google.script.run
+      .withSuccessHandler(function (res) {
+        state.savedSessionId = res.sessionId;
+        btn.textContent = '✅ 저장됨';
+        toast('`팀편성이력` 시트에 ' + res.rows + '행을 저장했습니다.');
+        // 새 이력을 반영해 반복 조합 가중치를 갱신
+        google.script.run
+          .withSuccessHandler(function (data) {
+            state.pairWeights = data.pairWeights || {};
+            state.recentSessions = data.recentSessions || [];
+            renderHistory();
+          })
+          .withFailureHandler(function () { /* 갱신 실패는 조용히 무시 */ })
+          .getClassData(info.className);
+      })
+      .withFailureHandler(function (err) {
+        btn.disabled = false;
+        btn.textContent = '💾 이력 저장';
+        onServerError(err);
+      })
+      .saveTeamResult({
+        className: info.className,
+        activity: info.activity,
+        date: info.date,
+        teams: out.teams.map(function (t) {
+          return {
+            name: t.name,
+            members: t.members.map(function (m) {
+              return { no: m.no, name: m.name, gender: m.gender, level: m.level };
+            })
+          };
+        })
+      });
+  }
+
+  /* ────────────── 학생 선택 모달 ────────────── */
+
+  function openPicker(type) {
+    if (!state.students.length) { toast('학급을 먼저 선택해 주세요.', true); return; }
+    picker.type = type;
+    picker.selected = {};
+    $('picker-title').textContent = type === 'together' ? '같은 팀으로 묶기' : '서로 다른 팀으로';
+    $('picker-sub').textContent = type === 'together'
+      ? '항상 같은 팀이 될 학생을 2명 이상 선택하세요.'
+      : '서로 다른 팀으로 갈라 놓을 학생을 2명 이상 선택하세요.';
+    $('picker-search').value = '';
+    renderPickerList('');
+    $('picker').classList.add('open');
+    setTimeout(function () { $('picker-search').focus(); }, 50);
+  }
+
+  function renderPickerList(query) {
+    var q = (query || '').trim().toLowerCase();
+    var list = state.students.filter(function (s) {
+      if (state.absentKeys[s.key]) return false;
+      if (!q) return true;
+      return s.name.toLowerCase().indexOf(q) >= 0 || String(s.no).indexOf(q) === 0;
+    });
+
+    $('picker-list').innerHTML = list.length ? list.map(function (s) {
+      var on = !!picker.selected[s.key];
+      return '<button type="button" class="chip selectable' + (on ? ' picked' : '') +
+        '" data-pick="' + esc(s.key) + '">' +
+        '<span class="no">' + esc(s.no) + '</span><span>' + esc(s.name) + '</span>' +
+        '</button>';
+    }).join('') : '<div class="empty-note">해당하는 학생이 없습니다.</div>';
+  }
+
+  function confirmPicker() {
+    var keys = Object.keys(picker.selected).filter(function (k) { return picker.selected[k]; });
+    if (keys.length < 2) { toast('2명 이상 선택해 주세요.', true); return; }
+
+    var rule = { id: uid(), keys: keys };
+    if (picker.type === 'together') state.together.push(rule);
+    else state.apart.push(rule);
+
+    closePicker();
+    renderRules();
+    saveLocal();
+    toast('조건을 추가했습니다.');
+  }
+
+  function closePicker() { $('picker').classList.remove('open'); }
+
+  /* ────────────── 이벤트 ────────────── */
+
+  function setTeamCount(n) {
+    state.teamCount = Math.max(2, Math.min(20, parseInt(n, 10) || 2));
+    renderTeamCount();
+    saveLocal();
+  }
+
+  function bindEvents() {
+    $('class-select').addEventListener('change', function () { loadClass(this.value); });
+
+    $('btn-reload').addEventListener('click', function () {
+      google.script.run.withSuccessHandler(onBootstrap).withFailureHandler(onServerError).getBootstrap();
+      if (state.className) loadClass(state.className);
+    });
+
+    $('team-minus').addEventListener('click', function () { setTeamCount(state.teamCount - 1); });
+    $('team-plus').addEventListener('click', function () { setTeamCount(state.teamCount + 1); });
+    $('team-count').addEventListener('change', function () { setTeamCount(this.value); });
+    $('quick-teams').addEventListener('click', function (e) {
+      var b = e.target.closest('button[data-team]');
+      if (b) setTeamCount(b.dataset.team);
+    });
+
+    Array.prototype.forEach.call(document.querySelectorAll('.toggle'), function (el) {
+      el.addEventListener('click', function (e) {
+        e.preventDefault();
+        var opt = el.dataset.opt;
+        if (opt !== 'pureRandom' && state.options.pureRandom) {
+          toast('완전 랜덤 모드에서는 균형 옵션이 적용되지 않습니다.');
+          return;
+        }
+        state.options[opt] = !state.options[opt];
+        renderOptions();
+        saveLocal();
+      });
+    });
+
+    $('roster').addEventListener('click', function (e) {
+      var chip = e.target.closest('[data-key]');
+      if (!chip) return;
+      var key = chip.dataset.key;
+      if (state.absentKeys[key]) delete state.absentKeys[key];
+      else state.absentKeys[key] = true;
+      renderRoster();
+      saveLocal();
+    });
+
+    $('btn-all-present').addEventListener('click', function () {
+      state.absentKeys = {};
+      renderRoster();
+      saveLocal();
+    });
+
+    $('btn-invert').addEventListener('click', function () {
+      var next = {};
+      state.students.forEach(function (s) {
+        if (!state.absentKeys[s.key]) next[s.key] = true;
+      });
+      state.absentKeys = next;
+      renderRoster();
+      saveLocal();
+    });
+
+    Array.prototype.forEach.call(document.querySelectorAll('[data-add-rule]'), function (btn) {
+      btn.addEventListener('click', function () { openPicker(btn.dataset.addRule); });
+    });
+
+    document.addEventListener('click', function (e) {
+      var del = e.target.closest('.rule .del');
+      if (!del) return;
+      var rule = del.closest('.rule');
+      var id = rule.dataset.ruleId;
+      var type = rule.dataset.ruleType;
+      var list = type === 'together' ? state.together : state.apart;
+      for (var i = 0; i < list.length; i++) {
+        if (list[i].id === id) { list.splice(i, 1); break; }
+      }
+      renderRules();
+      saveLocal();
+    });
+
+    $('picker-list').addEventListener('click', function (e) {
+      var chip = e.target.closest('[data-pick]');
+      if (!chip) return;
+      var key = chip.dataset.pick;
+      picker.selected[key] = !picker.selected[key];
+      chip.classList.toggle('picked', !!picker.selected[key]);
+    });
+    $('picker-search').addEventListener('input', function () { renderPickerList(this.value); });
+    $('picker-ok').addEventListener('click', confirmPicker);
+    $('picker-cancel').addEventListener('click', closePicker);
+    $('picker').addEventListener('click', function (e) {
+      if (e.target === this) closePicker();
+    });
+
+    $('btn-organize').addEventListener('click', organize);
+    $('btn-reroll').addEventListener('click', organize);
+    $('btn-copy').addEventListener('click', copyResult);
+    $('btn-big').addEventListener('click', openBigView);
+    $('btn-print').addEventListener('click', function () { window.print(); });
+    $('btn-save').addEventListener('click', saveResult);
+    $('big-close').addEventListener('click', closeBigView);
+
+    document.addEventListener('keydown', function (e) {
+      if (e.key === 'Escape') { closeBigView(); closePicker(); }
+      if (e.key === 'Enter' && $('picker').classList.contains('open')) confirmPicker();
+    });
+  }
+
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', init);
+  } else {
+    init();
+  }
+})();
+</script>
